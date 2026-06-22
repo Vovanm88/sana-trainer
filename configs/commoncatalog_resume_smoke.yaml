@@ -1,0 +1,19 @@
+model: {pretrained_model: Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers, variant: bf16}
+data:
+  factory: fm_train.example_dataset:build_commoncatalog_dataset
+  factory_args: {root: /workspace/data/commoncatalog, split: train, max_samples: 4}
+  validation_factory_args: {root: /workspace/data/commoncatalog, split: validation, max_samples: 2}
+  resolution: 1024
+  batch_size: 1
+  num_workers: 1
+  prompt_dropout: 0.1
+cache: {mode: offline, directory: /workspace/supups/fmtrain/cache/smoke, producer_device: "cuda:0", queue_size: 2}
+training: {profile: sft, output_dir: /workspace/supups/fmtrain/outputs/smoke, max_steps: 2, gradient_accumulation_steps: 1, mixed_precision: bf16, seed: 42, max_grad_norm: 1.0, loss_scale: 1024.0, resume_from: latest}
+objective: {name: flow, scheduler: z_image, shift: 3.0, num_train_timesteps: 1000, weighting: none}
+optimizer: {name: adamw, learning_rate: 1.0e-5, weight_decay: 0.01}
+lr: {warmup_ratio: 0.05, cooldown_ratio: 0.1, plateau_factor: 0.5, plateau_patience: 3}
+deepspeed: {stage: 2, config_file: accelerate/zero2.yaml}
+validation: {enabled: true, every_steps: 1, batches: 1, seed: 1234}
+sampling: {enabled: false, every_steps: 1, prompts: [], num_inference_steps: 2, guidance_scale: 1.0, seed: 1234}
+checkpointing: {every_steps: 2, keep_last: 1, milestone_steps: []}
+trackio: {enabled: false, project: sana-fm-smoke}

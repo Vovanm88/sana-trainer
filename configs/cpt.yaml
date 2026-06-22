@@ -1,0 +1,39 @@
+model:
+  pretrained_model: Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
+  variant: bf16
+data:
+  factory: fm_train.example_dataset:build_dataset
+  factory_args: {parquet: data/cpt-train.parquet}
+  validation_factory_args: {parquet: data/cpt-validation.parquet}
+  resolution: 1024
+  batch_size: 1
+  num_workers: 4
+  prompt_dropout: 0.1
+cache:
+  mode: offline
+  directory: cache/cpt
+  producer_device: cuda:0
+  queue_size: 8
+training:
+  profile: cpt
+  output_dir: outputs/cpt
+  max_steps: 100000
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  seed: 42
+  max_grad_norm: 1.0
+  loss_scale: 1024.0
+objective: {name: flow, scheduler: z_image, shift: 3.0, num_train_timesteps: 1000, weighting: none}
+optimizer: {name: adamw, learning_rate: 1.0e-5, weight_decay: 0.01}
+lr: {warmup_ratio: 0.05, cooldown_ratio: 0.1, plateau_factor: 0.5, plateau_patience: 3}
+deepspeed: {stage: 2, config_file: accelerate/zero2.yaml}
+validation: {enabled: true, every_steps: 500, batches: 8, seed: 1234}
+sampling:
+  enabled: true
+  every_steps: 2000
+  prompts: ["a detailed photograph of a mountain lake"]
+  num_inference_steps: 30
+  guidance_scale: 4.5
+  seed: 1234
+checkpointing: {every_steps: 2000, keep_last: 5, milestone_steps: [25000, 50000, 75000]}
+trackio: {enabled: true, project: sana-fm-cpt}
