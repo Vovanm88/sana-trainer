@@ -1,6 +1,8 @@
 import torch
+from PIL import Image
 
-from fm_train.data import EpochRandomSampler, apply_prompt_dropout
+from fm_train.data import EpochRandomSampler, apply_prompt_dropout, prepare_image
+from fm_train.precompute import online_indices
 from fm_train.producer import BoundedProducer
 
 
@@ -15,6 +17,20 @@ def test_prompt_dropout_replaces_conditioning():
     assert not result_mask.any()
 
 
+def test_prompt_dropout_trims_empty_conditioning_to_batch_length():
+    embeds = torch.ones(1, 2, 4)
+    masks = torch.ones(1, 2, dtype=torch.long)
+    empty = torch.zeros(1, 5, 4)
+    empty_mask = torch.zeros(1, 5, dtype=torch.long)
+
+    result, result_mask, _ = apply_prompt_dropout(
+        embeds, masks, empty, empty_mask, probability=1.0
+    )
+
+    assert result.shape == embeds.shape
+    assert result_mask.shape == masks.shape
+
+
 def test_bounded_producer_preserves_order():
     assert list(BoundedProducer(range(20), lambda value: value * 2, maxsize=2)) == list(range(0, 40, 2))
 
@@ -25,3 +41,28 @@ def test_epoch_sampler_is_repeatable_and_changes_by_epoch():
     assert first == list(sampler)
     sampler.set_epoch(1)
     assert first != list(sampler)
+
+
+def test_epoch_sampler_can_include_epoch_in_indices():
+    sampler = EpochRandomSampler(list(range(20)), seed=7, include_epoch=True)
+
+    assert all(epoch == 0 for epoch, _ in sampler)
+    sampler.set_epoch(1)
+    assert all(epoch == 1 for epoch, _ in sampler)
+
+
+def test_online_producer_order_matches_training_sampler_epochs():
+    values = list(range(20))
+    sampler = EpochRandomSampler(values, seed=7)
+    for epoch in range(3):
+        sampler.set_epoch(epoch)
+        expected = list(sampler)
+        actual = online_indices(len(values), seed=7, epoch=epoch, shard_index=0, num_shards=1)
+        assert actual == expected
+
+
+def test_prepare_image_makes_non_square_image_exactly_square():
+    result = prepare_image(Image.new("RGB", (1200, 1600)), resolution=1024)
+
+    assert result.shape == (3, 1024, 1024)
+    assert result.is_contiguous()

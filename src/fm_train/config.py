@@ -34,6 +34,7 @@ class CacheConfig:
     producer_device: str = "cuda:0"
     queue_size: int = 8
     batch_size: int = 8
+    online_max_entries: int = 256
     overwrite: bool = False
 
 
@@ -153,6 +154,8 @@ class Config:
             raise ValueError("Online preprocessing requires a dedicated CUDA producer_device")
         if self.cache.batch_size < 1:
             raise ValueError("cache.batch_size must be positive")
+        if self.cache.online_max_entries < self.cache.batch_size:
+            raise ValueError("cache.online_max_entries must be >= cache.batch_size")
         if self.objective.shift <= 0:
             raise ValueError("objective.shift must be positive")
         if self.optimizer.name not in ("sgd", "adamw", "adamw8bit"):

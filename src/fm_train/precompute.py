@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 import time
 
 import torch
@@ -9,6 +10,11 @@ from .cache import CacheCorruptionError, TensorCache, cache_fingerprint
 from .config import Config
 from .data import build_dataset, prepare_image, validate_sample
 from .producer import BoundedProducer
+
+
+def online_indices(length: int, seed: int, epoch: int, shard_index: int, num_shards: int) -> list[int]:
+    generator = torch.Generator().manual_seed(seed + epoch)
+    return torch.randperm(length, generator=generator).tolist()[shard_index::num_shards]
 
 
 def run_precompute(
@@ -43,6 +49,17 @@ def run_precompute(
             datasets = [validation, *datasets] if online else [*datasets, validation]
         for factory_args, is_training in datasets:
             dataset = build_dataset(config.data.factory, factory_args)
+            pending_keys: deque[str] = deque()
+
+            def wait_for_capacity(incoming: int) -> None:
+                if not online or not is_training:
+                    return
+                while len(pending_keys) + incoming > config.cache.online_max_entries:
+                    while pending_keys and not cache.contains(pending_keys[0]):
+                        pending_keys.popleft()
+                    if len(pending_keys) + incoming <= config.cache.online_max_entries:
+                        break
+                    time.sleep(0.1)
 
             def prepare(index: int):
                 sample = dataset[index]
@@ -50,6 +67,7 @@ def run_precompute(
                 key = cache_fingerprint(
                     config.model.pretrained_model, config.model.revision, config.data.resolution,
                     sample["id"], sample["caption"],
+                    f"epoch:{epoch}" if online and is_training else None,
                 )
                 if cache.contains(key) and not config.cache.overwrite:
                     try:
@@ -63,12 +81,6 @@ def run_precompute(
                     image = image.pin_memory()
                 return key, sample, image
 
-            indices = range(shard_index, len(dataset), num_shards)
-            if online and is_training:
-                generator = torch.Generator().manual_seed(config.training.seed)
-                indices = torch.randperm(len(dataset), generator=generator).tolist()[shard_index::num_shards]
-            prepared = BoundedProducer(indices, prepare, maxsize=config.cache.queue_size)
-
             def encode_batch(items: list[tuple]) -> None:
                 images = torch.stack([item[2] for item in items]).to(
                     device, dtype=dtype, non_blocking=True
@@ -80,35 +92,69 @@ def run_precompute(
                     max_sequence_length=config.model.max_sequence_length,
                 )
                 for item_index, (key, sample, _) in enumerate(items):
+                    prompt_mask = masks[item_index].cpu()
+                    prompt_length = max(int(prompt_mask.sum().item()), 1)
                     cache.store(
                         key,
                         {"id": sample["id"], "caption": sample["caption"],
                          "latent": latents[item_index].cpu(),
-                         "prompt_embeds": embeds[item_index].cpu(),
-                         "prompt_mask": masks[item_index].cpu()},
+                         "prompt_embeds": embeds[item_index, :prompt_length].cpu(),
+                         "prompt_mask": prompt_mask[:prompt_length]},
                         overwrite=config.cache.overwrite,
                     )
 
-            pending = []
-            cached = 0
-            label = "train" if is_training else "validation"
-            with tqdm(
-                total=len(indices), desc=f"Cache {label}", unit="sample",
-                dynamic_ncols=True, position=1 if online else 0,
-            ) as progress:
-                for key, sample, image in prepared:
-                    if image is None:
-                        cached += 1
-                        progress.set_postfix(cached=cached)
-                        progress.update()
-                        continue
-                    pending.append((key, sample, image))
-                    if len(pending) == config.cache.batch_size:
+            epoch = 0
+            while True:
+                if online and is_training:
+                    indices = online_indices(
+                        len(dataset), config.training.seed, epoch, shard_index, num_shards
+                    )
+                    label = f"Online train producer epoch {epoch + 1}"
+                else:
+                    indices = range(shard_index, len(dataset), num_shards)
+                    split = "train" if is_training else "validation"
+                    label = f"Cache {split} (persistent)"
+                prepared = BoundedProducer(indices, prepare, maxsize=config.cache.queue_size)
+                pending = []
+                cached = 0
+                with tqdm(
+                    total=len(indices), desc=label, unit="sample",
+                    dynamic_ncols=True, position=1 if online else 0,
+                ) as progress:
+                    for key, sample, image in prepared:
+                        if image is None:
+                            wait_for_capacity(1)
+                            if online and is_training:
+                                pending_keys.append(key)
+                            cached += 1
+                            postfix = {"cached": cached}
+                            if online and is_training:
+                                postfix["window"] = f"{len(pending_keys)}/{config.cache.online_max_entries}"
+                            progress.set_postfix(postfix)
+                            progress.update()
+                            continue
+                        pending.append((key, sample, image))
+                        if len(pending) == config.cache.batch_size:
+                            wait_for_capacity(len(pending))
+                            encode_batch(pending)
+                            if online and is_training:
+                                pending_keys.extend(item[0] for item in pending)
+                                progress.set_postfix(
+                                    window=f"{len(pending_keys)}/{config.cache.online_max_entries}"
+                                )
+                            progress.update(len(pending))
+                            pending.clear()
+                            if online:
+                                time.sleep(0)
+                    if pending:
+                        wait_for_capacity(len(pending))
                         encode_batch(pending)
+                        if online and is_training:
+                            pending_keys.extend(item[0] for item in pending)
+                            progress.set_postfix(
+                                window=f"{len(pending_keys)}/{config.cache.online_max_entries}"
+                            )
                         progress.update(len(pending))
-                        pending.clear()
-                        if online:
-                            time.sleep(0)
-                if pending:
-                    encode_batch(pending)
-                    progress.update(len(pending))
+                if not online or not is_training:
+                    break
+                epoch += 1

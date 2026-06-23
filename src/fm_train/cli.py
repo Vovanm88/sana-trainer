@@ -28,7 +28,8 @@ def _launch(config_path: str) -> int:
     training_env = environment.copy()
     training_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
     command = [
-        "accelerate", "launch", "--config_file", config.deepspeed.config_file,
+        sys.executable, "-m", "accelerate.commands.launch",
+        "--config_file", config.deepspeed.config_file,
         "--num_processes", str(len(devices)),
         "--gradient_accumulation_steps", str(config.training.gradient_accumulation_steps),
         "-m", "fm_train.cli", "train", config_path,

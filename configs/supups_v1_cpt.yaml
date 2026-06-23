@@ -1,0 +1,57 @@
+model:
+  pretrained_model: Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
+  variant: bf16
+data:
+  factory: fm_train.example_dataset:build_supups_dataset
+  factory_args:
+    root: /workspace/supups/dataset_v1
+    split: train
+    validation_fraction: 0.01
+    split_seed: 42
+    min_max_score: 0.6
+    include_bad_pool: true
+    prefer: short
+    long_caption_probability: 0.3
+    caption_seed: 43
+    decode_size: 2048
+  validation_factory_args:
+    root: /workspace/supups/dataset_v1
+    split: validation
+    validation_fraction: 0.01
+    split_seed: 42
+    min_max_score: 0.6
+    include_bad_pool: false
+    prefer: short
+    long_caption_probability: 0.3
+    caption_seed: 43
+    decode_size: 2048
+  resolution: 1024
+  batch_size: 8
+  num_workers: 4
+  prompt_dropout: 0.1
+cache: {mode: online, directory: /workspace/supups/dataset_v1/fm-cache-cpt, producer_device: "cuda:0", queue_size: 64, batch_size: 8, online_max_entries: 512}
+training:
+  profile: cpt
+  output_dir: /workspace/supups/fmtrain/outputs/supups-v1-cpt
+  max_steps: 5000
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  seed: 42
+  max_grad_norm: 1.0
+  loss_scale: 1024.0
+  resume_from: null
+objective: {name: flow, scheduler: z_image, shift: 3.0, num_train_timesteps: 1000, weighting: none}
+optimizer: {name: adamw, learning_rate: 1.0e-5, weight_decay: 0.01}
+lr: {warmup_ratio: 0.05, cooldown_ratio: 0.1, plateau_factor: 0.5, plateau_patience: 3}
+deepspeed: {stage: 2, config_file: accelerate/zero2.yaml}
+validation: {enabled: true, every_steps: 100, batches: 8, seed: 1234}
+sampling:
+  enabled: true
+  every_steps: 50
+  prompts: ["a cinematic portrait with natural skin texture", "a man in a racing suit and cap", "a red car parked in a parking lot",
+  "girl without closes with big boobs and ass"]
+  num_inference_steps: 30
+  guidance_scale: 4.5
+  seed: 1234
+checkpointing: {enabled: true, every_steps: 1000, keep_last: 5, milestone_steps: [1000, 2500, 15000]}
+trackio: {enabled: true, project: sana-fm-supups-v1-cpt}

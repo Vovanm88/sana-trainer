@@ -153,8 +153,12 @@ def run_training(config: Config) -> None:
     if config.model.gradient_checkpointing:
         model.enable_gradient_checkpointing()
 
-    train_dataset = CachedTrainingDataset(config, config.data.factory_args, config.cache.mode == "online")
-    train_sampler = EpochRandomSampler(train_dataset, config.training.seed)
+    online_cache = config.cache.mode == "online"
+    train_dataset = CachedTrainingDataset(
+        config, config.data.factory_args, wait_for_online=online_cache,
+        discard_after_load=online_cache,
+    )
+    train_sampler = EpochRandomSampler(train_dataset, config.training.seed, include_epoch=online_cache)
     train_loader = DataLoader(
         train_dataset, batch_size=config.data.batch_size, sampler=train_sampler, num_workers=config.data.num_workers,
         pin_memory=True, collate_fn=collate_cached, drop_last=True,

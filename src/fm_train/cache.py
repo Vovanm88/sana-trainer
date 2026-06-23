@@ -17,10 +17,17 @@ class CacheCorruptionError(RuntimeError):
     pass
 
 
-def cache_fingerprint(model: str, revision: str | None, resolution: int, sample_id: str, caption: str) -> str:
+def cache_fingerprint(
+    model: str,
+    revision: str | None,
+    resolution: int,
+    sample_id: str,
+    caption: str,
+    occurrence: str | None = None,
+) -> str:
     value = json.dumps(
         {"v": CACHE_VERSION, "model": model, "revision": revision, "resolution": resolution,
-         "id": sample_id, "caption": caption},
+         "id": sample_id, "caption": caption, "occurrence": occurrence},
         sort_keys=True,
         ensure_ascii=True,
     )
