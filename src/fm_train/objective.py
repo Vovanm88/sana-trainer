@@ -21,9 +21,13 @@ def loss_weight(sigma: torch.Tensor, scheme: str) -> torch.Tensor:
     raise ValueError(f"Unknown weighting scheme: {scheme}")
 
 
-def flow_mse(prediction: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+def flow_mse_per_sample(prediction: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     per_element = (prediction.float() - target.float()).square() * weight.float()
-    return per_element.reshape(per_element.shape[0], -1).mean(dim=1).mean()
+    return per_element.reshape(per_element.shape[0], -1).mean(dim=1)
+
+
+def flow_mse(prediction: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    return flow_mse_per_sample(prediction, target, weight).mean()
 
 
 @dataclass
@@ -41,14 +45,37 @@ class FlowSchedule:
         return cls(scheduler.sigmas[:-1].cpu(), scheduler.timesteps.cpu())
 
     def sample(
-        self, batch_size: int, device: torch.device, dtype: torch.dtype, generator: torch.Generator | None = None
+        self,
+        batch_size: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        generator: torch.Generator | None = None,
+        t_sampling_bias: float = 1.0,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        if t_sampling_bias <= 0:
+            raise ValueError("t_sampling_bias must be positive")
         generator_device = getattr(generator, "device", torch.device("cpu"))
-        indices = torch.randint(
-            0, len(self.timesteps)-1, (batch_size,), generator=generator, device=generator_device
-        ).cpu()
-        timesteps = self.timesteps[indices].to(device=device)
-        sigma = self.sigmas[indices].to(device=device, dtype=dtype)
+        valid_count = min(len(self.sigmas), len(self.timesteps))
+        valid_timesteps = self.timesteps[:valid_count]
+        max_timestep = valid_timesteps.float().max().clamp_min(1)
+        normalized_timesteps = valid_timesteps.float() / max_timestep
+        order = torch.argsort(normalized_timesteps)
+        t_grid = normalized_timesteps[order]
+        sigma_grid = self.sigmas[:valid_count].float()[order]
+
+        t = torch.rand(batch_size, generator=generator, device=generator_device).cpu()
+        if t_sampling_bias != 1.0:
+            t = t.pow(t_sampling_bias)
+        right = torch.searchsorted(t_grid, t, right=True).clamp(1, valid_count - 1)
+        left = right - 1
+        span = (t_grid[right] - t_grid[left]).clamp_min(1e-12)
+        blend = (t - t_grid[left]) / span
+        sigma = sigma_grid[left] + blend * (sigma_grid[right] - sigma_grid[left])
+
+        nearest = torch.where(blend < 0.5, left, right)
+        indices = order[nearest]
+        timesteps = (t * max_timestep).to(device=device)
+        sigma = sigma.to(device=device, dtype=dtype)
         return sigma, timesteps, indices
 
 

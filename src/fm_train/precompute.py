@@ -12,9 +12,29 @@ from .data import build_dataset, prepare_image, validate_sample
 from .producer import BoundedProducer
 
 
-def online_indices(length: int, seed: int, epoch: int, shard_index: int, num_shards: int) -> list[int]:
+def prune_consumed_keys(cache: TensorCache, pending_keys: deque[str]) -> None:
+    survivors: deque[str] = deque()
+    while pending_keys:
+        key = pending_keys.popleft()
+        if cache.contains(key):
+            survivors.append(key)
+    pending_keys.extend(survivors)
+
+
+def online_indices(
+    length: int,
+    seed: int,
+    epoch: int,
+    shard_index: int,
+    num_shards: int,
+    consumer_batch_size: int = 1,
+    consumer_processes: int = 1,
+) -> list[int]:
+    if consumer_batch_size < 1 or consumer_processes < 1:
+        raise ValueError("Online consumer batch size and process count must be positive")
     generator = torch.Generator().manual_seed(seed + epoch)
-    return torch.randperm(length, generator=generator).tolist()[shard_index::num_shards]
+    consumed = length - (length % (consumer_batch_size * consumer_processes))
+    return torch.randperm(length, generator=generator).tolist()[:consumed][shard_index::num_shards]
 
 
 def run_precompute(
@@ -22,6 +42,7 @@ def run_precompute(
     online: bool = False,
     shard_index: int = 0,
     num_shards: int = 1,
+    online_consumer_processes: int = 1,
 ) -> None:
     from diffusers import SanaPipeline
 
@@ -55,8 +76,7 @@ def run_precompute(
                 if not online or not is_training:
                     return
                 while len(pending_keys) + incoming > config.cache.online_max_entries:
-                    while pending_keys and not cache.contains(pending_keys[0]):
-                        pending_keys.popleft()
+                    prune_consumed_keys(cache, pending_keys)
                     if len(pending_keys) + incoming <= config.cache.online_max_entries:
                         break
                     time.sleep(0.1)
@@ -106,15 +126,24 @@ def run_precompute(
             epoch = 0
             while True:
                 if online and is_training:
+                    set_epoch = getattr(dataset, "set_epoch", None)
+                    if set_epoch is not None:
+                        set_epoch(epoch)
                     indices = online_indices(
-                        len(dataset), config.training.seed, epoch, shard_index, num_shards
+                        len(dataset), config.training.seed, epoch, shard_index, num_shards,
+                        config.data.batch_size, online_consumer_processes,
                     )
                     label = f"Online train producer epoch {epoch + 1}"
                 else:
                     indices = range(shard_index, len(dataset), num_shards)
                     split = "train" if is_training else "validation"
                     label = f"Cache {split} (persistent)"
-                prepared = BoundedProducer(indices, prepare, maxsize=config.cache.queue_size)
+                prepared = BoundedProducer(
+                    indices,
+                    prepare,
+                    maxsize=config.cache.queue_size,
+                    workers=config.cache.prepare_workers,
+                )
                 pending = []
                 cached = 0
                 with tqdm(

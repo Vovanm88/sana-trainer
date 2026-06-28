@@ -1,0 +1,75 @@
+model:
+  pretrained_model: Efficient-Large-Model/Sana_1600M_1024px_BF16_diffusers
+  variant: bf16
+data:
+  factory: fm_train.example_dataset:build_supups_dataset_4tier
+  factory_args:
+    root: /workspace/supups/dataset_v1
+    split: train
+    validation_fraction: 0.01
+    split_seed: 42
+    min_max_score: 0.6
+    include_bad_pool: true
+    prefer: short
+    caption_seed: 67
+    decode_size: 2048
+    p_very_short: 0.25
+    p_short: 0.45
+    p_long: 0.3
+    p_no_tag: 0.5
+    p_tag_suffix: 0.25
+    p_tag_prefix: 0.25
+    p_tag_upper: 0.25
+    p_tag_lower: 0.25
+    p_tag_period: 0.5
+    tag_seed: 67
+  validation_factory_args:
+    root: /workspace/supups/dataset_v1
+    split: validation
+    validation_fraction: 0.01
+    split_seed: 42
+    min_max_score: 0.6
+    include_bad_pool: false
+    prefer: short
+    caption_seed: 67
+    decode_size: 2048
+    p_very_short: 0.25
+    p_short: 0.45
+    p_long: 0.3
+    p_no_tag: 0.5
+    p_tag_suffix: 0.25
+    p_tag_prefix: 0.25
+    p_tag_upper: 0.25
+    p_tag_lower: 0.25
+    p_tag_period: 0.5
+    tag_seed: 67
+  resolution: 1024
+  batch_size: 8
+  num_workers: 4
+  prompt_dropout: 0.075
+cache: {mode: online, directory: /workspace/supups/dataset_v1/fm-cache-cpt, producer_device: "cuda:0", queue_size: 64, batch_size: 12, prepare_workers: 4, online_max_entries: 512}
+training:
+  profile: cpt
+  output_dir: /workspace/supups/fmtrain/outputs/supups-v2-cpt
+  max_steps: 5000
+  gradient_accumulation_steps: 4
+  mixed_precision: bf16
+  seed: 67
+  max_grad_norm: 1.0
+  loss_scale: 64.0
+  resume_from: null
+objective: {name: flow, scheduler: z_image, shift: 3.0, num_train_timesteps: 1000, weighting: none, t_sampling_bias: 2.0}
+optimizer: {name: adamw, learning_rate: 4.0e-6, weight_decay: 0.01}
+lr: {warmup_ratio: 0.05, cooldown_ratio: 0.1, plateau_factor: 0.8, plateau_patience: 2}
+deepspeed: {stage: 2, config_file: accelerate/zero2.yaml}
+validation: {enabled: true, every_steps: 100, batches: 8, seed: 1234}
+sampling:
+  enabled: true
+  every_steps: 50
+  prompts: ["a cinematic portrait with natural skin texture", "a man in a racing suit and cap", "a red car parked in a parking lot",
+  "girl without closes with big boobs and ass","The image depicts an anime-style character with light blue hair and purple eyes, wearing a dark blue bikini, captured in a dynamic pose as if jumping mid-air. The character is set against a plain white background, emphasizing the vibrant colors and detailed artwork. The style is clean and modem, typical of contemporary anime illustrations, with smooth lines and soft shading that highlights the character's form.", "Five children, dressed in school uniforms, stand in a line on the steps in front of a large, ornate cathedral with two tall spires and intricate architectural details."]
+  num_inference_steps: 30
+  guidance_scale: 4.5
+  seed: 1234
+checkpointing: {enabled: true, every_steps: 1000, keep_last: 5, milestone_steps: [1000, 2500, 3500]}
+trackio: {enabled: true, project: sana-fm-supups-v2-cpt}

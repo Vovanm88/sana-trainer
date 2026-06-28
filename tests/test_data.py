@@ -2,7 +2,9 @@ import torch
 from PIL import Image
 
 from fm_train.data import EpochRandomSampler, apply_prompt_dropout, prepare_image
-from fm_train.precompute import online_indices
+from collections import deque
+
+from fm_train.precompute import online_indices, prune_consumed_keys
 from fm_train.producer import BoundedProducer
 
 
@@ -59,6 +61,53 @@ def test_online_producer_order_matches_training_sampler_epochs():
         expected = list(sampler)
         actual = online_indices(len(values), seed=7, epoch=epoch, shard_index=0, num_shards=1)
         assert actual == expected
+
+
+def test_online_producer_drops_distributed_training_tail():
+    values = list(range(29))
+    sampler = EpochRandomSampler(values, seed=7)
+    expected = list(sampler)[:24]
+
+    actual = online_indices(
+        len(values),
+        seed=7,
+        epoch=0,
+        shard_index=0,
+        num_shards=1,
+        consumer_batch_size=8,
+        consumer_processes=3,
+    )
+
+    assert actual == expected
+
+
+def test_online_producer_tail_drop_happens_before_precompute_sharding():
+    actual = online_indices(
+        29,
+        seed=7,
+        epoch=0,
+        shard_index=1,
+        num_shards=2,
+        consumer_batch_size=8,
+        consumer_processes=3,
+    )
+
+    assert actual == online_indices(29, 7, 0, 0, 1, 8, 3)[1::2]
+
+
+def test_online_window_prunes_consumed_keys_outside_fifo_order():
+    class Cache:
+        def __init__(self, existing: set[str]):
+            self.existing = existing
+
+        def contains(self, key: str) -> bool:
+            return key in self.existing
+
+    pending = deque(["kept-head", "consumed-middle", "kept-tail"])
+
+    prune_consumed_keys(Cache({"kept-head", "kept-tail"}), pending)
+
+    assert list(pending) == ["kept-head", "kept-tail"]
 
 
 def test_prepare_image_makes_non_square_image_exactly_square():

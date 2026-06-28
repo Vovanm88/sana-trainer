@@ -25,3 +25,11 @@ def test_rejects_invalid_ratios():
     with pytest.raises(ValueError, match="plateau phase"):
         config.validate()
 
+
+def test_training_can_resume_weights_without_global_step():
+    config = Config()
+    config.validation.enabled = False
+    config.training.resume_from = "outputs/cpt/milestone-2500"
+    config.training.resume_global_step = False
+    config.validate()
+    assert config.training.resume_global_step is False

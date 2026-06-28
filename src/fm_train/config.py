@@ -34,6 +34,7 @@ class CacheConfig:
     producer_device: str = "cuda:0"
     queue_size: int = 8
     batch_size: int = 8
+    prepare_workers: int = 1
     online_max_entries: int = 256
     overwrite: bool = False
 
@@ -49,6 +50,7 @@ class TrainingConfig:
     max_grad_norm: float = 1.0
     loss_scale: float = 1024.0
     resume_from: str | None = None
+    resume_global_step: bool = True
 
 
 @dataclass
@@ -58,6 +60,7 @@ class ObjectiveConfig:
     shift: float = 3.0
     num_train_timesteps: int = 1000
     weighting: Literal["none", "sigma_inverse"] = "none"
+    t_sampling_bias: float = 1.0
 
 
 @dataclass
@@ -154,10 +157,14 @@ class Config:
             raise ValueError("Online preprocessing requires a dedicated CUDA producer_device")
         if self.cache.batch_size < 1:
             raise ValueError("cache.batch_size must be positive")
+        if self.cache.prepare_workers < 1:
+            raise ValueError("cache.prepare_workers must be positive")
         if self.cache.online_max_entries < self.cache.batch_size:
             raise ValueError("cache.online_max_entries must be >= cache.batch_size")
         if self.objective.shift <= 0:
             raise ValueError("objective.shift must be positive")
+        if self.objective.t_sampling_bias <= 0:
+            raise ValueError("objective.t_sampling_bias must be positive")
         if self.optimizer.name not in ("sgd", "adamw", "adamw8bit"):
             raise ValueError(f"Unsupported optimizer: {self.optimizer.name}")
         if self.objective.scheduler not in ("z_image", "flux1"):

@@ -16,28 +16,32 @@ def main() -> None:
     parser.add_argument("config")
     parser.add_argument("--samples", type=int, default=64)
     parser.add_argument("--batch-sizes", type=int, nargs="+", default=[4, 8, 16])
+    parser.add_argument("--prepare-workers", type=int, nargs="+", default=[1])
     parser.add_argument("--output-root", default="cache/precompute-benchmark")
     args = parser.parse_args()
-    for batch_size in args.batch_sizes:
-        config = load_config(args.config)
-        config.validation.enabled = False
-        config.data.factory_args["max_samples"] = args.samples
-        config.cache.batch_size = batch_size
-        config.cache.overwrite = True
-        config.cache.directory = f"{args.output_root}-bs{batch_size}"
-        target = Path(config.cache.directory).resolve()
-        expected = Path(args.output_root + f"-bs{batch_size}").resolve()
-        if target != expected:
-            raise RuntimeError(f"Unexpected benchmark cache path: {target}")
-        shutil.rmtree(target, ignore_errors=True)
-        started = time.perf_counter()
-        run_precompute(config)
-        elapsed = time.perf_counter() - started
-        print(
-            f"batch_size={batch_size} samples={args.samples} seconds={elapsed:.3f} "
-            f"images_per_second={args.samples / elapsed:.3f}",
-            flush=True,
-        )
+    for prepare_workers in args.prepare_workers:
+        for batch_size in args.batch_sizes:
+            config = load_config(args.config)
+            config.validation.enabled = False
+            config.data.factory_args["max_samples"] = args.samples
+            config.cache.batch_size = batch_size
+            config.cache.prepare_workers = prepare_workers
+            config.cache.overwrite = True
+            config.cache.directory = f"{args.output_root}-w{prepare_workers}-bs{batch_size}"
+            target = Path(config.cache.directory).resolve()
+            expected = Path(args.output_root + f"-w{prepare_workers}-bs{batch_size}").resolve()
+            if target != expected:
+                raise RuntimeError(f"Unexpected benchmark cache path: {target}")
+            shutil.rmtree(target, ignore_errors=True)
+            started = time.perf_counter()
+            run_precompute(config)
+            elapsed = time.perf_counter() - started
+            print(
+                f"prepare_workers={prepare_workers} batch_size={batch_size} "
+                f"samples={args.samples} seconds={elapsed:.3f} "
+                f"images_per_second={args.samples / elapsed:.3f}",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":

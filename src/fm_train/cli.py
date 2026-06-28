@@ -19,12 +19,17 @@ def _launch(config_path: str) -> int:
         producer_index = int(config.cache.producer_device.split(":", 1)[1])
         if producer_index >= len(devices) or len(devices) < 2:
             raise ValueError("Online mode needs at least one producer GPU and one training GPU")
+        training_devices = [device for index, device in enumerate(devices) if index != producer_index]
         producer_env = environment.copy()
         producer_env["CUDA_VISIBLE_DEVICES"] = devices[producer_index]
         producer = subprocess.Popen(
-            [sys.executable, "-m", "fm_train.cli", "precompute", config_path, "--online"], env=producer_env
+            [
+                sys.executable, "-m", "fm_train.cli", "precompute", config_path, "--online",
+                "--online-consumer-processes", str(len(training_devices)),
+            ],
+            env=producer_env,
         )
-        devices = [device for index, device in enumerate(devices) if index != producer_index]
+        devices = training_devices
     training_env = environment.copy()
     training_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
     command = [
@@ -59,6 +64,7 @@ def make_parser() -> argparse.ArgumentParser:
     precompute.add_argument("--online", action="store_true")
     precompute.add_argument("--shard-index", type=int, default=0)
     precompute.add_argument("--num-shards", type=int, default=1)
+    precompute.add_argument("--online-consumer-processes", type=int, default=1)
     validate = subparsers.add_parser("validate-config")
     validate.add_argument("config")
     return parser
@@ -72,7 +78,9 @@ def main() -> None:
     elif args.command == "precompute":
         from .precompute import run_precompute
 
-        run_precompute(config, args.online, args.shard_index, args.num_shards)
+        run_precompute(
+            config, args.online, args.shard_index, args.num_shards, args.online_consumer_processes
+        )
     elif args.command == "train":
         from .trainer import run_training
 

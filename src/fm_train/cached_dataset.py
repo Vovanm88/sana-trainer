@@ -25,6 +25,11 @@ class CachedTrainingDataset(Dataset):
     def __len__(self) -> int:
         return len(self.dataset)
 
+    def set_epoch(self, epoch: int) -> None:
+        set_epoch = getattr(self.dataset, "set_epoch", None)
+        if set_epoch is not None:
+            set_epoch(epoch)
+
     def __getitem__(self, index: int | tuple[int, int]) -> dict:
         occurrence = None
         if isinstance(index, tuple):
